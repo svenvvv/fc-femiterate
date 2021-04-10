@@ -29,10 +29,11 @@ BUILTIN_QUICK_EXPRESSIONS = [
 ]
 
 
-def find_object_by_typeid(document, type):
-    for obj in document.Objects:
+def find_object_by_typeid(type, match_label=None):
+    for obj in FreeCAD.ActiveDocument.Objects:
         if obj.TypeId == type:
-            return obj
+            if match_label is None or obj.Label == match_label:
+                return obj
     return None
 
 
@@ -151,7 +152,7 @@ class AddChangeWindow():
             self.type = USERTYPE_PYTHON
             if not _validate_python_expr(val):
                 QMessageBox.information(None, MSGBOX_TITLE,
-                        'Expression evaluation failed.\nCheck the Python console for error log.')
+                        "Expression evaluation failed.\nCheck the Python console for error log.")
                 return
         elif typ == "Unit string":
             self.type = USERTYPE_UNIT
@@ -172,26 +173,85 @@ class AddChangeWindow():
         self.form.close()
 
 
+class Settings():
+    def __init__(self):
+        self.changes = {}
+        self.checks = []
+        self.iteration_limit = 20
+        self.csv_suffix = "femiterate.csv"
+        self.quick_expressions = BUILTIN_QUICK_EXPRESSIONS
+        self._obj = None
+
+        self._obj = find_object_by_typeid("App::FeaturePython", "FEMIterateSettings")
+        if not self._obj:
+            self._obj = self.create_new()
+        else:
+            self.load()
+
+    def create_new(self):
+        obj = FreeCAD.ActiveDocument.addObject("App::FeaturePython", "FEMIterateSettings")
+        # General configuration
+        obj.addProperty("App::PropertyInteger", "IterationLimit", "Configuration", "")
+        obj.addProperty("App::PropertyString", "CsvSuffix", "Configuration", "")
+        # Parameters
+        obj.addProperty("App::PropertyPythonObject", "Changes", "Parameters", "")
+        obj.addProperty("App::PropertyPythonObject", "Checks", "Parameters", "")
+
+        self._obj = obj
+        self.save()
+        return obj
+
+    def load(self):
+        self.iteration_limit = self._obj.IterationLimit
+        self.csv_suffix = self._obj.CsvSuffix
+
+        self.changes = self._obj.Changes
+        self.checks = self._obj.Checks
+
+    def save(self):
+        self._obj.IterationLimit = self.iteration_limit
+        self._obj.CsvSuffix = self.csv_suffix
+
+        self._obj.Changes = self.changes
+        self._obj.Checks = self.checks
+
+
 class MainWindow():
     def __init__(self, doc):
-        self._document = doc
         self.form = FreeCADGui.PySideUic.loadUi(UI_MAIN_FILE_PATH)
+        self._calculation_running = False
+
+        self._settings = Settings()
+        self._apply_settings()
+
+        self._fem_mesh = None
+        self._fem_analysis = None
+        self._fem_solver = None
 
         f = self.form
 
         f.progressBar.setVisible(False)
         f.progressText.setVisible(False)
 
-        f.objectsAutoButton.clicked.connect(lambda: self._find_mesh_and_analysis_objects(False))
-        f.analysisSelect.clicked.connect(self._select_fem_analysis)
-        f.meshSelect.clicked.connect(self._select_fem_mesh)
+        f.objectsAutoButton.clicked.connect(lambda:
+                self._find_mesh_and_analysis_objects(True))
+        f.analysisSelect.clicked.connect(lambda:
+                self._set_objects_tab_val("_fem_analysis", self._select_object(),
+                    f.analysisEdit, TYPEID_FEM_ANALYSIS))
+        f.meshSelect.clicked.connect(lambda:
+                self._set_objects_tab_val("_fem_mesh", self._select_object(),
+                    f.meshEdit, TYPEID_FEM_MESH))
+        f.solverSelect.clicked.connect(lambda:
+                self._set_objects_tab_val("_fem_solver", self._select_object(),
+                    f.solverEdit, TYPEID_FEM_SOLVER))
 
         f.calculateButton.clicked.connect(self._calculate)
 
         # Changes table buttons
         f.changesAdd.clicked.connect(lambda: self._modify_changes())
 
-        f.changesRemove.clicked.connect(lambda: f.changesView.removeRow(f.changesView.currentRow()))
+        f.changesRemove.clicked.connect(lambda:
+                f.changesView.removeRow(f.changesView.currentRow()))
 
         changes_edit_fn = lambda: self._modify_changes(f.changesView.currentRow())
         f.changesEdit.clicked.connect(changes_edit_fn)
@@ -199,7 +259,8 @@ class MainWindow():
 
         # Checks table buttons
         f.checksAdd.clicked.connect(lambda: self._modify_checks())
-        f.checksRemove.clicked.connect(lambda: f.checksView.takeItem(f.checksView.selectedIndexes()[0].row()))
+        f.checksRemove.clicked.connect(lambda:
+                f.checksView.takeItem(f.checksView.selectedIndexes()[0].row()))
 
         checks_edit_fn = lambda: self._modify_checks(f.checksView.currentRow())
         f.checksEdit.clicked.connect(checks_edit_fn)
@@ -208,6 +269,26 @@ class MainWindow():
         if not self._find_mesh_and_analysis_objects(False):
             f.tabWidget.setCurrentIndex(0)
 
+    def _apply_settings(self):
+        f = self.form
+        s = self._settings
+
+        f.iterationLimitEdit.setValue(s.iteration_limit)
+        f.csvFilenameEdit.setText(s.csv_suffix)
+
+        # Apply changes to table
+        if s.changes is not None:
+            for (objname, changes) in s.changes.items():
+                print(changes)
+                for (prop, change) in changes.items():
+                    self._add_or_modify_change(objname, prop,
+                            change["val"], change["type"])
+
+        if s.changes is not None:
+            for expr in s.checks:
+                f.checksView.addItem(expr)
+
+
     def _read_changes_from_table(self):
         ret = {}
         changes_view = self.form.changesView
@@ -215,7 +296,7 @@ class MainWindow():
         for row_idx in range(changes_view.rowCount()):
             val_item = changes_view.item(row_idx, 2)
             objname = changes_view.item(row_idx, 0).text()
-            objref = self._document.getObject(objname)
+            objref = FreeCAD.ActiveDocument.getObject(objname)
             prop = changes_view.item(row_idx, 1).text()
 
             if objname not in ret:
@@ -223,10 +304,9 @@ class MainWindow():
 
             ret[objname][prop] = {
                 "val": val_item.text(),
-                "typ": val_item.toolTip(),
+                "type": val_item.toolTip(),
                 "orig": getattr(objref, prop)
             }
-
         return ret
 
     def _read_checks_from_table(self):
@@ -246,11 +326,11 @@ class MainWindow():
             for (prop, change) in changes.items():
                 prev = getattr(obj, prop)
 
-                if change['typ'] == USERTYPE_UNIT:
-                    new_val = prev + Units.Quantity(change['val'])
+                if change["type"] == USERTYPE_UNIT:
+                    new_val = prev + Units.Quantity(change["val"])
                     setattr(obj, prop, new_val)
-                # else:
-                #     self.form.logBox.append(f"No support for user type {change['typ']} yet...")
+                else:
+                    print(f"No support for user type {change['typ']} yet...")
 
     @staticmethod
     def _revert_delta_changes(changes_dict):
@@ -313,9 +393,23 @@ class MainWindow():
         return None
 
     def _calculate(self):
+        self._settings.save()
+
         print("Starting solving...")
 
-        max_iterations = int(self.form.iterationLimitEdit.text())
+        if not self._fem_mesh:
+            self.form.logBox.append(f"<b>Missing FEM mesh, see options tab</b>")
+            return
+        if not self._fem_solver:
+            self.form.logBox.append(f"<b>Missing FEM solver, see options tab</b>")
+            return
+        if not self._fem_analysis:
+            self.form.logBox.append(f"<b>Missing FEM analysis, see options tab</b>")
+            return
+
+        self._calculation_running = True
+
+        max_iterations = self._settings.iteration_limit
         print(f"Max iterations: {max_iterations}")
 
         start_time = time.time()
@@ -326,12 +420,16 @@ class MainWindow():
         self.form.progressText.setVisible(True)
 
         # Aggregate all checks and changes from table cells
-        changes_dict = self._read_changes_from_table()
-        checks_list = self._read_checks_from_table()
 
         # Loop until we hit max iterations or a check passes
         condition_fail = False
         iteration = 0
+
+        changes = self._settings.changes
+        checks = self._settings.checks
+
+        fea = ccxtools.FemToolsCcx(analysis=self._fem_analysis, solver=self._fem_solver)
+        fea.purge_results()
 
         try:
             fea = ccxtools.FemToolsCcx(analysis=self._fem_analysis, solver=self._fem_solver)
@@ -346,7 +444,7 @@ class MainWindow():
             self.form.progressText.setText(f"Running iteration {iteration+1}/{max_iterations}")
             self.form.logBox.append(f"<b>Running iteration {iteration+1}</b>")
 
-            ret = self._calculate_single_shot(fea, changes_dict, checks_list,
+            ret = self._calculate_single_shot(fea, changes, checks,
                                               iteration, self.form.logBox, self._fem_mesh)
             if ret is not None:
                 if ret is False:
@@ -356,7 +454,7 @@ class MainWindow():
             self.form.logBox.append("Checking...")
             current_result = self._find_rename_latest_result(iteration)
 
-            if self._eval_checks(checks_list, current_result, iteration):
+            if self._eval_checks(checks, current_result, iteration):
                 self.form.logBox.append("All checks passed!")
                 break
 
@@ -372,7 +470,7 @@ class MainWindow():
             self.form.logBox.append(f"<b>Had an error!</b>")
 
         self.form.logBox.append("Restoring original values...")
-        self._revert_delta_changes(changes_dict)
+        self._revert_delta_changes(changes)
 
         self.form.logBox.append("<b>Done!</b>")
 
@@ -381,6 +479,7 @@ class MainWindow():
 
         self.form.progressText.setText(f"Finished in {elapsed_time} s, computed {iteration} iterations")
         self.form.progressBar.setVisible(False)
+        self._calculation_running = False
 
     def _modify_checks(self, modify_row_idx=None):
         # Early out if the user clicked edit without selecting a row
@@ -403,6 +502,27 @@ class MainWindow():
             else:
                 widget.addItem(f.expr)
 
+        # TODO: we don't have to re-read the whole table every time
+        self._settings.checks = self._read_checks_from_table()
+
+    def _add_or_modify_change(self, objname, prop, value, type, row_number=None):
+        table = self.form.changesView
+        if not row_number:
+            row_count = table.rowCount()
+            row_number = row_count
+
+            table.insertRow(row_number)
+            table.setItem(row_number, 0, QTableWidgetItem())
+            table.setItem(row_number, 1, QTableWidgetItem())
+            table.setItem(row_number, 2, QTableWidgetItem())
+
+        table.item(row_number, 0).setText(objname)
+        table.item(row_number, 1).setText(prop)
+        val_item = table.item(row_number, 2)
+        # A lil' HACK. Store the value type as tooltip so we can retrieve it later :)
+        val_item.setText(value)
+        val_item.setToolTip(type)
+
 
     def _modify_changes(self, modify_row_idx=None):
         # Early out if the user clicked edit without selecting a row
@@ -412,7 +532,6 @@ class MainWindow():
         table = self.form.changesView
         obj = self._select_object()
         if obj:
-            edit_mode = False
             sel_prop = None
             sel_val = None
 
@@ -420,28 +539,15 @@ class MainWindow():
                 # sel_obj = table.item(modify_row_idx, 0).text()
                 sel_prop = table.item(modify_row_idx, 1).text()
                 sel_val = table.item(modify_row_idx, 2).text()
-                edit_mode = True
+            else:
+                modify_row_idx = None
 
             f = AddChangeWindow(obj, sel_prop, sel_val)
 
             if f.form.exec_():
-                if not edit_mode:
-                    rowcount = table.rowCount()
-                    modify_row_idx = rowcount
-
-                    table.insertRow(rowcount)
-                    table.setItem(rowcount, 0, QTableWidgetItem())
-                    table.setItem(rowcount, 1, QTableWidgetItem())
-                    table.setItem(rowcount, 2, QTableWidgetItem())
-
-                table.item(modify_row_idx, 0).setText(obj.Name)
-                table.item(modify_row_idx, 1).setText(f.prop)
-                val_item = table.item(modify_row_idx, 2)
-                # A lil' HACK. Store the value type as tooltip so we can retrieve it later :)
-                val_item.setText(str(f.value))
-                val_item.setToolTip(f.type)
-
-                return
+                self._add_or_modify_change(obj.Label, f.prop, f.value, f.type, modify_row_idx)
+                # TODO: we don't have to re-read the whole table every time
+                self._settings.changes = self._read_changes_from_table()
 
     def _select_object(self):
         selection = FreeCADGui.Selection.getSelection()
@@ -451,53 +557,44 @@ class MainWindow():
             QMessageBox.information(None, MSGBOX_TITLE, "Select a single object")
             return None
 
-    def _set_fem_mesh(self, mesh):
-        if mesh and mesh.TypeId == TYPEID_FEM_MESH:
-            self._fem_mesh = GmshTools(mesh)
-            self.form.meshEdit.setText(mesh.Label)
+    def _set_objects_tab_val(self, dest, obj, textedit, expected_type=None, provided_label=None):
+        # NOTE: check for obj because we're calling this from button callbacks
+        if obj and (not expected_type or obj.TypeId == expected_type):
+            if provided_label:
+                textedit.setText(provided_label)
+            else:
+                textedit.setText(obj.Label)
+            print(f"Set {dest} to {obj}")
+            setattr(self, dest, obj)
         else:
-            QMessageBox.information(None, MSGBOX_TITLE, "Selected object is not a FEM mesh")
-
-    def _set_fem_analysis(self, analysis):
-        if analysis and analysis.TypeId == TYPEID_FEM_ANALYSIS:
-            self._fem_analysis = analysis
-            self.form.analysisEdit.setText(analysis.Label)
-        else:
-            QMessageBox.information(None, MSGBOX_TITLE, "Selected object is not a FEM analysis")
+            QMessageBox.information(None, MSGBOX_TITLE, f"Selected object is not a {expected_type}")
 
     def _find_mesh_and_analysis_objects(self, complain=True):
         found_something = False
-        mesh = find_object_by_typeid(self._document, TYPEID_FEM_MESH)
-        an = find_object_by_typeid(self._document, TYPEID_FEM_ANALYSIS)
-        solver = find_object_by_typeid(self._document, TYPEID_FEM_SOLVER)
+        f = self.form
+        mesh = find_object_by_typeid(TYPEID_FEM_MESH)
+        an = find_object_by_typeid(TYPEID_FEM_ANALYSIS)
+        solver = find_object_by_typeid(TYPEID_FEM_SOLVER)
 
         if mesh:
             found_something = True
-            self._set_fem_mesh(mesh)
-            print(f'Found mesh {mesh.Label}')
+            self._set_objects_tab_val("_fem_mesh", GmshTools(mesh), f.meshEdit, None, mesh.Label)
+            print(f"Found mesh {mesh.Label}")
         if an:
             found_something = True
-            self._set_fem_analysis(an)
-            print(f'Found analysis {an.Label}')
+            self._set_objects_tab_val("_fem_analysis", an, f.analysisEdit)
+            print(f"Found analysis {an.Label}")
         if solver:
             found_something = True
-            self._fem_solver = solver
-            print(f'Found solver {solver.Label}')
+            self._set_objects_tab_val("_fem_solver", solver, f.solverEdit)
+            print(f"Found solver {solver.Label}")
 
-        if not found_something and complain:
-            QMessageBox.information(None, MSGBOX_TITLE, "Did not find any objects")
+        if not found_something:
+            print(f"Did not autofind any objects!!")
+            if complain:
+                QMessageBox.information(None, MSGBOX_TITLE, "Did not find any objects")
 
         return mesh and an
-
-    def _select_fem_mesh(self):
-        obj = self._select_object()
-        if obj:
-            self._set_fem_mesh(obj)
-
-    def _select_fem_analysis(self):
-        obj = self._select_object()
-        if obj:
-            self._set_fem_analysis(obj)
 
     def show_window(self):
         self.form.exec_()
