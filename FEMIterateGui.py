@@ -10,20 +10,21 @@ MSGBOX_TITLE = "Iterative CCX Solver"
 TYPEID_FEM_MESH = "Fem::FemMeshObjectPython"
 TYPEID_FEM_ANALYSIS = "Fem::FemAnalysis"
 
-base_gui_path = FreeCAD.getUserMacroDir() + "FEMIterate"
-main_gui_file_path = f"{base_gui_path}/main.ui"
-add_change_gui_file_path = f"{base_gui_path}/addchange.ui"
-add_check_gui_file_path = f"{base_gui_path}/addcheck.ui"
+UI_BASE_PATH = FreeCAD.getUserMacroDir() + "FEMIterate"
+UI_MAIN_FILE_PATH = f"{UI_BASE_PATH}/main.ui"
+UI_CHANGE_FILE_PATH = f"{UI_BASE_PATH}/addchange.ui"
+UI_CHECK_FILE_PATH = f"{UI_BASE_PATH}/addcheck.ui"
 
-# Set this to false to have the GUI in a new window
-as_toolbar = True
+GUI_IN_SIDEBAR = True
 
 USERTYPE_NUMBER = "Number"
 USERTYPE_UNIT = "Unit"
 USERTYPE_PYTHON = "Python expr."
 
-TABLETYPE_CHANGES = 0
-TABLETYPE_CHECKS = 1
+BUILTIN_QUICK_EXPRESSIONS = [
+    "max(r.vonMises) < 100",
+    "max(r.Temperature) < 300"
+]
 
 
 def find_object_by_typeid(type):
@@ -33,24 +34,63 @@ def find_object_by_typeid(type):
     return None
 
 
-class PropSelectWindow():
-    def __init__(self, table_type, obj, selected_param=None, selected_value=None, selected_value_type=None):
-        self.form = FreeCADGui.PySideUic.loadUi(add_change_gui_file_path)
+def _validate_python_expr(expr):
+    # TODO: Implement non-shit validation or remove completely
+    print(f"Validating: {expr}")
+    try:
+        # NOTE: Not unused, eval variabless
+        # x = 1.0
+        # i = 10
+        # i += eval(expr)
+        return True
+    except Exception as e:
+        print(f"Validation error: {e}")
+        return False
+
+
+class AddCheckWindow():
+    def __init__(self, edit_expr=None):
+        self.form = FreeCADGui.PySideUic.loadUi(UI_CHECK_FILE_PATH)
+        self.expr = edit_expr
+
+        f = self.form
+
+        if edit_expr:
+            f.exprEdit.setText(edit_expr)
+
+        f.buttonBox.accepted.connect(self._cb_accept)
+        f.buttonBox.rejected.connect(self._cb_cancel)
+
+        for e in BUILTIN_QUICK_EXPRESSIONS:
+            f.quickExprList.addItem(e)
+
+        set_quick_expr = lambda s: f.exprEdit.setText(f.quickExprList.item(s.row()).text())
+        f.quickExprList.doubleClicked.connect(set_quick_expr)
+
+    def _cb_accept(self):
+        self.expr = self.form.exprEdit.text()
+
+        if _validate_python_expr(self.expr):
+            self.form.accept()
+        else:
+            QMessageBox.information(None, MSGBOX_TITLE,
+                    "Provided expression did not evaluate!\nCheck the report view for error log.")
+
+    def _cb_cancel(self):
+        self.form.close()
+
+class AddChangeWindow():
+    def __init__(self, obj, selected_param=None, selected_value=None, selected_value_type=None):
+        self.form = FreeCADGui.PySideUic.loadUi(UI_CHANGE_FILE_PATH)
 
         self.prop = None
         self.value = None
         self.type = None
-        self.table_type = table_type
         self.prop_type_lut = {}
 
         f = self.form
-        f.buttonBox.accepted.connect(self._cb_add_change_gui_file_path_accept)
-        f.buttonBox.rejected.connect(self._cb_add_change_gui_file_path_cancel)
-        f.propsTable.cellClicked.connect(self._cb_select_row)
-
-        if selected_value:
-            match = self.form.propsTable.findItems(selected_value, PySide.QtCore.Qt.MatchFlag.MatchStartsWith)
-
+        f.buttonBox.accepted.connect(self._cb_accept)
+        f.buttonBox.rejected.connect(self._cb_cancel)
         f.searchBox.textChanged.connect(self._search_fn)
 
         tbl = f.propsTable
@@ -78,20 +118,6 @@ class PropSelectWindow():
         if selected_value:
             f.valueEdit.setText(selected_value)
 
-        if table_type == TABLETYPE_CHANGES:
-            f.setWindowTitle("Add changing value")
-            f.selectLabel.setText("Value to add every iteration")
-        elif table_type == TABLETYPE_CHECKS:
-            f.setWindowTitle("Add check")
-            f.selectLabel.setText("Python check expression")
-
-            # Only supports Python expressions in checks
-            f.typeBox.setParent(None)
-            f.typeLabel.setParent(None)
-        else:
-            QMessageBox.information(None, MSGBOX_TITLE, "Invalid table type")
-            return
-
     def _search_fn(self, text):
         match = self.form.propsTable.findItems(text, PySide.QtCore.Qt.MatchFlag.MatchStartsWith)
         match_rows = [m.row() for m in match]
@@ -103,26 +129,7 @@ class PropSelectWindow():
             else:
                 self.form.propsTable.hideRow(row)
 
-    def _validate_python_expr(self, expr):
-        print(f"Validating: {expr}")
-        try:
-            # TODO: Maybe try different checks depending on table type
-            # if self.table_type == TABLETYPE_CHANGES:
-            # elif self.table_type == TABLETYPE_CHECKS:
-
-            # NOTE: Not unused, eval variabless
-            x = 1.0
-            i = 10
-            i += eval(expr)
-            return True
-        except Exception as e:
-            print(f"Validation error: {e}")
-            return False
-
-    def _cb_select_row(self, row, column):
-        self.prop = self.form.propsTable.item(row, 0).text()
-
-    def _cb_add_change_gui_file_path_accept(self):
+    def _cb_accept(self):
         val = self.form.valueEdit.text()
 
         selected_row = self.form.propsTable.currentRow()
@@ -138,13 +145,12 @@ class PropSelectWindow():
         self.prop = self.form.propsTable.item(selected_row, 0).text()
 
         typ = self.form.typeBox.currentText()
-        if typ == "Python expression" or self.table_type == TABLETYPE_CHECKS:
+        if typ == "Python expression":
             self.type = USERTYPE_PYTHON
-            # TODO: Implement non-shit validation or remove completely
-            # if not self._validate_python_expr(val):
-                # QMessageBox.information(None, MSGBOX_TITLE,
-                #                        'Expression evaluation failed.\nCheck the Python console for error log.')
-                # return
+            if not _validate_python_expr(val):
+                QMessageBox.information(None, MSGBOX_TITLE,
+                        'Expression evaluation failed.\nCheck the Python console for error log.')
+                return
         elif typ == "Unit string":
             self.type = USERTYPE_UNIT
             # Attempt to parse unit so we can detect invalid units
@@ -160,45 +166,45 @@ class PropSelectWindow():
 
         self.form.accept()
 
-    def _cb_add_change_gui_file_path_cancel(self):
+    def _cb_cancel(self):
         self.form.close()
 
 
 class MainWindow():
     def __init__(self, doc):
-        self._change_values = []
-        self._check_values = []
         self._document = doc
-        self.form = FreeCADGui.PySideUic.loadUi(main_gui_file_path)
+        self.form = FreeCADGui.PySideUic.loadUi(UI_MAIN_FILE_PATH)
 
         f = self.form
 
         f.progressBar.setVisible(False)
         f.progressText.setVisible(False)
 
-        f.objectsAutoButton.clicked.connect(lambda: self._autofind_object_by_typeids(False))
+        f.objectsAutoButton.clicked.connect(lambda: self._find_mesh_and_analysis_objects(False))
         f.analysisSelect.clicked.connect(self._select_fem_analysis)
         f.meshSelect.clicked.connect(self._select_fem_mesh)
 
         f.calculateButton.clicked.connect(self._calculate)
 
         # Changes table buttons
-        f.changesAdd.clicked.connect(lambda: self._select_object_tables(f.changesView, TABLETYPE_CHANGES))
+        f.changesAdd.clicked.connect(lambda: self._modify_changes())
 
         f.changesRemove.clicked.connect(lambda: f.changesView.removeRow(f.changesView.currentRow()))
 
-        edit_fn = lambda: self._select_object_tables(f.changesView, TABLETYPE_CHANGES,
-                                                     f.changesView.currentRow())
-        f.changesEdit.clicked.connect(edit_fn)
-        f.changesView.doubleClicked.connect(edit_fn)
+        changes_edit_fn = lambda: self._modify_changes(f.changesView.currentRow())
+        f.changesEdit.clicked.connect(changes_edit_fn)
+        f.changesView.doubleClicked.connect(changes_edit_fn)
 
         # Checks table buttons
-        f.checksAdd.clicked.connect( lambda: self._select_object_tables(f.checksView, TABLETYPE_CHECKS))
-        f.checksRemove.clicked.connect(lambda: f.checksView.removeRow(f.checksView.currentRow()))
+        f.checksAdd.clicked.connect(lambda: self._modify_checks())
+        f.checksRemove.clicked.connect(lambda: f.checksView.takeItem(f.checksView.selectedIndexes()[0].row()))
 
-        if not self._autofind_object_by_typeids(False):
+        checks_edit_fn = lambda: self._modify_checks(f.checksView.currentRow())
+        f.checksEdit.clicked.connect(checks_edit_fn)
+        f.checksView.doubleClicked.connect(checks_edit_fn)
+
+        if not self._find_mesh_and_analysis_objects(False):
             f.tabWidget.setCurrentIndex(0)
-
 
     def _calculate(self):
         print("Starting solving...")
@@ -217,9 +223,9 @@ class MainWindow():
         check_view = self.form.checksView
 
         # Aggregate all checks and changes from table cells
-        start_values = {}
-        change_dict = {}
-        check_dict = {}
+        original_values = {}
+        changes_dict = {}
+        checks_list = []
 
         for row_idx in range(change_view.rowCount()):
             val_item = change_view.item(row_idx, 2)
@@ -227,27 +233,22 @@ class MainWindow():
             objref = self._document.getObject(objname)
             prop = change_view.item(row_idx, 1).text()
 
-            if objname not in change_dict:
-                change_dict[objname] = {}
+            if objname not in changes_dict:
+                changes_dict[objname] = {}
 
-            change_dict[objname][prop] = {
+            changes_dict[objname][prop] = {
                 "val": val_item.text(),
                 "typ": val_item.toolTip()
             }
 
             # Store original value so we can restore it later
-            if objname not in start_values:
-                start_values[objname] = {}
-            start_values[objname][prop] = getattr(objref, prop)
+            if objname not in original_values:
+                original_values[objname] = {}
+            original_values[objname][prop] = getattr(objref, prop)
 
-        for row_idx in range(check_view.rowCount()):
-            objname = check_view.item(row_idx, 0).text()
-            val_item = check_view.item(row_idx, 2)
-
-            if objname not in check_dict:
-                check_dict[objname] = []
-
-            check_dict[objname].append(str(val_item.text()))
+        for row_idx in range(check_view.count()):
+            expr = check_view.item(row_idx)
+            checks_list.append(expr.text())
 
         # Loop until we hit max iterations or a check passes
         condition_fail = False
@@ -263,9 +264,8 @@ class MainWindow():
             self.form.logBox.append(f"<b>Running iteration {iteration+1}</b>")
 
             self.form.logBox.append("Applying changes...")
-            for (objname, changes) in change_dict.items():
+            for (objname, changes) in changes_dict.items():
                 obj = self._document.getObject(objname)
-                print(changes)
                 for (prop, change) in changes.items():
                     prev = getattr(obj, prop)
 
@@ -291,6 +291,8 @@ class MainWindow():
                 fea.load_results()
             else:
                 self.form.logBox.append(f"CCX setup error: {fem_msg}")
+                condition_fail = True
+                break
 
             self.form.logBox.append("Checking...")
 
@@ -303,23 +305,20 @@ class MainWindow():
                     current_result = femobj
                     break
 
-            print(f"Last FEM result: {femobj.Label}")
+            print(f"Last FEM result: {current_result.Label}")
 
-            total_checks = 0
             passed_checks = 0
-            for (objname, checks) in check_dict.items():
-                obj = self._document.getObject(objname)
-                for expr in checks:
-                    x = getattr(obj, prop)
-                    i = iteration
-                    r = current_result
-                    ret = eval(expr)
+            for expr in checks_list:
+                # NOTE: not unused, these are for access from user expression
+                x = getattr(obj, prop)
+                i = iteration
+                r = current_result
+                ret = eval(expr)
 
-                    total_checks += 1
-                    if ret is True:
-                        passed_checks += 1
+                if ret is True:
+                    passed_checks += 1
 
-            if total_checks == passed_checks:
+            if passed_checks == len(checks_list):
                 self.form.logBox.append("All checks passed!")
                 break
 
@@ -328,9 +327,12 @@ class MainWindow():
         if iteration == max_iterations:
             self.form.logBox.append(f"<b>Hit iteration limit without finding a solution</b>")
 
+        if condition_fail:
+            self.form.logBox.append(f"<b>Had an error!</b>")
+
         self.form.logBox.append("Restoring original values...")
 
-        for (objname, changes) in start_values.items():
+        for (objname, changes) in original_values.items():
             obj = self._document.getObject(objname)
             for (prop, val) in changes.items():
                 setattr(obj, prop, val)
@@ -347,27 +349,47 @@ class MainWindow():
     def _clear_object_table(self, table):
         table.setRowCount(0)
 
-    def _select_object_tables(self, table, table_type, modify_row_idx=None):
-        # TODO: auto-select the object by name if we're in edit dialog
+    def _modify_checks(self, modify_row_idx=None):
         # Early out if the user clicked edit without selecting a row
         if modify_row_idx == -1:
             return
 
-        print(modify_row_idx)
+        edit_mode = False
+        expr = None
+        widget = self.form.checksView
 
+        if modify_row_idx is not None and modify_row_idx >= 0:
+            expr = widget.item(modify_row_idx).text()
+            edit_mode = True
+
+        f = AddCheckWindow(expr)
+
+        if f.form.exec_():
+            if edit_mode:
+                widget.item(modify_row_idx).setText(f.expr)
+            else:
+                widget.addItem(f.expr)
+
+
+    def _modify_changes(self, modify_row_idx=None):
+        # Early out if the user clicked edit without selecting a row
+        if modify_row_idx == -1:
+            return
+
+        table = self.form.changesView
         obj = self._select_object()
         if obj:
             edit_mode = False
+            sel_prop = None
+            sel_val = None
+
             if modify_row_idx is not None and modify_row_idx >= 0:
                 # sel_obj = table.item(modify_row_idx, 0).text()
                 sel_prop = table.item(modify_row_idx, 1).text()
                 sel_val = table.item(modify_row_idx, 2).text()
                 edit_mode = True
-            else:
-                sel_prop = None
-                sel_val = None
 
-            f = PropSelectWindow(table_type, obj, sel_prop, sel_val)
+            f = AddChangeWindow(obj, sel_prop, sel_val)
 
             if f.form.exec_():
                 if not edit_mode:
@@ -410,7 +432,7 @@ class MainWindow():
         else:
             QMessageBox.information(None, MSGBOX_TITLE, "Selected object is not a FEM analysis")
 
-    def _autofind_object_by_typeids(self, complain=True):
+    def _find_mesh_and_analysis_objects(self, complain=True):
         found_something = False
         mesh = find_object_by_typeid(TYPEID_FEM_MESH)
         an = find_object_by_typeid(TYPEID_FEM_ANALYSIS)
@@ -441,7 +463,7 @@ class MainWindow():
         self.form.exec_()
 
     def accept(self):
-        if as_toolbar:
+        if GUI_IN_SIDEBAR:
             FreeCADGui.Control.closeDialog()
 
 doc = FreeCAD.ActiveDocument
@@ -451,7 +473,7 @@ if doc is None:
 else:
     gui = MainWindow(doc)
 
-    if as_toolbar:
+    if GUI_IN_SIDEBAR:
         FreeCADGui.Control.showDialog(gui)
     else:
         gui.show_window()

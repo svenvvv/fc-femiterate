@@ -11,7 +11,7 @@
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Edit change</string>
+   <string>Modify change</string>
   </property>
   <layout class="QGridLayout" name="gridLayout_2">
    <item row="0" column="0">
@@ -90,7 +90,7 @@
       <string notr="true">font-weight: bold;</string>
      </property>
      <property name="text">
-      <string>$$</string>
+      <string>Change value</string>
      </property>
     </widget>
    </item>
