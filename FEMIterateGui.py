@@ -239,21 +239,23 @@ class MainWindow():
 
         return ret
 
-    def _apply_delta_changes(self, changes_dict):
+    @staticmethod
+    def _apply_delta_changes(changes_dict):
         for (objname, changes) in changes_dict.items():
-            obj = self._document.getObject(objname)
+            obj = FreeCAD.ActiveDocument.getObject(objname)
             for (prop, change) in changes.items():
                 prev = getattr(obj, prop)
 
                 if change['typ'] == USERTYPE_UNIT:
                     new_val = prev + Units.Quantity(change['val'])
                     setattr(obj, prop, new_val)
-                else:
-                    self.form.logBox.append(f"No support for user type {change['typ']} yet...")
+                # else:
+                #     self.form.logBox.append(f"No support for user type {change['typ']} yet...")
 
-    def _revert_delta_changes(self, changes_dict):
+    @staticmethod
+    def _revert_delta_changes(changes_dict):
         for (objname, changes) in changes_dict.items():
-            obj = self._document.getObject(objname)
+            obj = FreeCAD.ActiveDocument.getObject(objname)
             for (prop, change) in changes.items():
                 setattr(obj, prop, change["orig"])
 
@@ -266,7 +268,8 @@ class MainWindow():
                 return femobj
         return None
 
-    def _eval_checks(self, checks, result, iteration):
+    @staticmethod
+    def _eval_checks(checks, result, iteration):
         for expr in checks:
             # NOTE: not unused, these are for access from user expression
             i = iteration
@@ -276,6 +279,38 @@ class MainWindow():
             if ret is not True:
                 return False
         return True
+
+    @staticmethod
+    def _calculate_single_shot(fea, changes, checks, iteration, logBox, fem_mesh):
+        """
+        @returns Tri-state logic.
+                 None indicates loop-again, True indicates that we found the
+                 correct solution and False indicates that something went wrong
+        """
+        logBox.append("Applying changes...")
+        MainWindow._apply_delta_changes(changes)
+
+        doc = FreeCAD.ActiveDocument
+
+        logBox.append("Meshing...")
+        doc.recompute()
+        fem_mesh.create_mesh()
+
+        logBox.append("Solving...")
+        fea.update_objects()
+        fea.setup_working_dir()
+        fea.setup_ccx()
+        fem_msg = fea.check_prerequisites()
+
+        if not fem_msg:
+            fea.write_inp_file()
+            fea.ccx_run()
+            fea.load_results()
+        else:
+            logBox.append(f"CCX setup error: {fem_msg}")
+            return False
+
+        return None
 
     def _calculate(self):
         print("Starting solving...")
@@ -311,26 +346,11 @@ class MainWindow():
             self.form.progressText.setText(f"Running iteration {iteration+1}/{max_iterations}")
             self.form.logBox.append(f"<b>Running iteration {iteration+1}</b>")
 
-            self.form.logBox.append("Applying changes...")
-            self._apply_delta_changes(changes_dict)
-
-            self.form.logBox.append("Meshing...")
-            self._document.recompute()
-            self._fem_mesh.create_mesh()
-
-            self.form.logBox.append("Solving...")
-            fea.update_objects()
-            fea.setup_working_dir()
-            fea.setup_ccx()
-            fem_msg = fea.check_prerequisites()
-
-            if not fem_msg:
-                fea.write_inp_file()
-                fea.ccx_run()
-                fea.load_results()
-            else:
-                self.form.logBox.append(f"CCX setup error: {fem_msg}")
-                condition_fail = True
+            ret = self._calculate_single_shot(fea, changes_dict, checks_list,
+                                              iteration, self.form.logBox, self._fem_mesh)
+            if ret is not None:
+                if ret is False:
+                    condition_fail = True
                 break
 
             self.form.logBox.append("Checking...")
@@ -354,7 +374,7 @@ class MainWindow():
         self.form.logBox.append("Restoring original values...")
         self._revert_delta_changes(changes_dict)
 
-        self.form.logBox.append("Done!")
+        self.form.logBox.append("<b>Done!</b>")
 
         elapsed_time = round(time.time() - start_time, 1)
         print(f"Solving finished in {elapsed_time} s")
