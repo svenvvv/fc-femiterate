@@ -7,8 +7,10 @@ import PySide
 import time
 
 MSGBOX_TITLE = "Iterative CCX Solver"
+
 TYPEID_FEM_MESH = "Fem::FemMeshObjectPython"
 TYPEID_FEM_ANALYSIS = "Fem::FemAnalysis"
+TYPEID_FEM_SOLVER = "Fem::FemSolverObjectPython"
 
 UI_BASE_PATH = FreeCAD.getUserMacroDir() + "FEMIterate"
 UI_MAIN_FILE_PATH = f"{UI_BASE_PATH}/main.ui"
@@ -27,8 +29,8 @@ BUILTIN_QUICK_EXPRESSIONS = [
 ]
 
 
-def find_object_by_typeid(type):
-    for obj in doc.Objects:
+def find_object_by_typeid(document, type):
+    for obj in document.Objects:
         if obj.TypeId == type:
             return obj
     return None
@@ -254,8 +256,13 @@ class MainWindow():
         condition_fail = False
         iteration = 0
 
-        fea = ccxtools.FemToolsCcx()
-        fea.purge_results()
+        try:
+            fea = ccxtools.FemToolsCcx(analysis=self._fem_analysis, solver=self._fem_solver)
+            fea.purge_results()
+        # ccxtools throws raw Exceptions, not a lazy catch-all here
+        except Exception as e:
+            self.form.logBox.append(f"<b>{e}</b>")
+            condition_fail = True
 
         while not condition_fail and iteration < max_iterations:
             self.form.progressBar.setValue(float(iteration+1) / float(max_iterations) * 100)
@@ -328,6 +335,9 @@ class MainWindow():
             self.form.logBox.append(f"<b>Hit iteration limit without finding a solution</b>")
 
         if condition_fail:
+            # Hide progressbars on failure since they can be in a weird state
+            self.form.progressBar.setVisible(False)
+            self.form.progressText.setVisible(False)
             self.form.logBox.append(f"<b>Had an error!</b>")
 
         self.form.logBox.append("Restoring original values...")
@@ -421,28 +431,35 @@ class MainWindow():
     def _set_fem_mesh(self, mesh):
         if mesh and mesh.TypeId == TYPEID_FEM_MESH:
             self._fem_mesh = GmshTools(mesh)
-            self.form.meshEdit.setText(mesh.Name)
+            self.form.meshEdit.setText(mesh.Label)
         else:
             QMessageBox.information(None, MSGBOX_TITLE, "Selected object is not a FEM mesh")
 
     def _set_fem_analysis(self, analysis):
         if analysis and analysis.TypeId == TYPEID_FEM_ANALYSIS:
             self._fem_analysis = analysis
-            self.form.analysisEdit.setText(analysis.Name)
+            self.form.analysisEdit.setText(analysis.Label)
         else:
             QMessageBox.information(None, MSGBOX_TITLE, "Selected object is not a FEM analysis")
 
     def _find_mesh_and_analysis_objects(self, complain=True):
         found_something = False
-        mesh = find_object_by_typeid(TYPEID_FEM_MESH)
-        an = find_object_by_typeid(TYPEID_FEM_ANALYSIS)
+        mesh = find_object_by_typeid(self._document, TYPEID_FEM_MESH)
+        an = find_object_by_typeid(self._document, TYPEID_FEM_ANALYSIS)
+        solver = find_object_by_typeid(self._document, TYPEID_FEM_SOLVER)
 
         if mesh:
             found_something = True
             self._set_fem_mesh(mesh)
+            print(f'Found mesh {mesh.Label}')
         if an:
             found_something = True
             self._set_fem_analysis(an)
+            print(f'Found analysis {an.Label}')
+        if solver:
+            found_something = True
+            self._fem_solver = solver
+            print(f'Found solver {solver.Label}')
 
         if not found_something and complain:
             QMessageBox.information(None, MSGBOX_TITLE, "Did not find any objects")
