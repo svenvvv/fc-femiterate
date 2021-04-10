@@ -7,6 +7,7 @@ import PySide
 import time
 
 MSGBOX_TITLE = "Iterative CCX Solver"
+FEMITERATE_VERSION = "0.0.1"
 
 TYPEID_FEM_MESH = "Fem::FemMeshObjectPython"
 TYPEID_FEM_ANALYSIS = "Fem::FemAnalysis"
@@ -193,6 +194,10 @@ class Settings():
         # General configuration
         obj.addProperty("App::PropertyInteger", "IterationLimit", "Configuration", "")
         obj.addProperty("App::PropertyString", "CsvSuffix", "Configuration", "")
+        # TODO: probably should check if we're missing some settings on load if we're a newer ver
+        obj.addProperty("App::PropertyString", "FEMIterateVersion", "Configuration", "")
+        # Quick expressions
+        obj.addProperty("App::PropertyPythonObject", "QuickExpressions", "Configuration", "")
         # Parameters
         obj.addProperty("App::PropertyPythonObject", "Changes", "Parameters", "")
         obj.addProperty("App::PropertyPythonObject", "Checks", "Parameters", "")
@@ -205,12 +210,18 @@ class Settings():
         self.iteration_limit = self._obj.IterationLimit
         self.csv_suffix = self._obj.CsvSuffix
 
+        # No need to load FEMIterateVersion
+        self.changes = self._obj.QuickExpressions
+
         self.changes = self._obj.Changes
         self.checks = self._obj.Checks
 
     def save(self):
         self._obj.IterationLimit = self.iteration_limit
         self._obj.CsvSuffix = self.csv_suffix
+
+        self._obj.FEMIterateVersion = FEMITERATE_VERSION
+        self._obj.QuickExpressions = self.quick_expressions
 
         self._obj.Changes = self.changes
         self._obj.Checks = self.checks
@@ -427,9 +438,6 @@ class MainWindow():
 
         changes = self._settings.changes
         checks = self._settings.checks
-
-        fea = ccxtools.FemToolsCcx(analysis=self._fem_analysis, solver=self._fem_solver)
-        fea.purge_results()
 
         try:
             fea = ccxtools.FemToolsCcx(analysis=self._fem_analysis, solver=self._fem_solver)
