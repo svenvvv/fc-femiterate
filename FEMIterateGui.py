@@ -208,6 +208,75 @@ class MainWindow():
         if not self._find_mesh_and_analysis_objects(False):
             f.tabWidget.setCurrentIndex(0)
 
+    def _read_changes_from_table(self):
+        ret = {}
+        changes_view = self.form.changesView
+
+        for row_idx in range(changes_view.rowCount()):
+            val_item = changes_view.item(row_idx, 2)
+            objname = changes_view.item(row_idx, 0).text()
+            objref = self._document.getObject(objname)
+            prop = changes_view.item(row_idx, 1).text()
+
+            if objname not in ret:
+                ret[objname] = {}
+
+            ret[objname][prop] = {
+                "val": val_item.text(),
+                "typ": val_item.toolTip(),
+                "orig": getattr(objref, prop)
+            }
+
+        return ret
+
+    def _read_checks_from_table(self):
+        ret = []
+        checks_view = self.form.checksView
+
+        for row_idx in range(checks_view.count()):
+            expr = checks_view.item(row_idx)
+            ret.append(expr.text())
+
+        return ret
+
+    def _apply_delta_changes(self, changes_dict):
+        for (objname, changes) in changes_dict.items():
+            obj = self._document.getObject(objname)
+            for (prop, change) in changes.items():
+                prev = getattr(obj, prop)
+
+                if change['typ'] == USERTYPE_UNIT:
+                    new_val = prev + Units.Quantity(change['val'])
+                    setattr(obj, prop, new_val)
+                else:
+                    self.form.logBox.append(f"No support for user type {change['typ']} yet...")
+
+    def _revert_delta_changes(self, changes_dict):
+        for (objname, changes) in changes_dict.items():
+            obj = self._document.getObject(objname)
+            for (prop, change) in changes.items():
+                setattr(obj, prop, change["orig"])
+
+    def _find_rename_latest_result(self, cur_iteration):
+        # TODO HACK: we assume that the latest FEM result obj is our result, there probably
+        # is a better way. This could cause some bugs later on.
+        for femobj in self._fem_analysis.Group:
+            if femobj.isDerivedFrom("Fem::FemResultObject") and not femobj.Label.startswith("Iteration"):
+                femobj.Label = f"Iteration{cur_iteration}"
+                return femobj
+        return None
+
+    def _eval_checks(self, checks, result, iteration):
+        for expr in checks:
+            # NOTE: not unused, these are for access from user expression
+            i = iteration
+            r = result
+            ret = eval(expr)
+
+            if ret is not True:
+                return False
+        return True
+
     def _calculate(self):
         print("Starting solving...")
 
@@ -221,36 +290,9 @@ class MainWindow():
         self.form.progressBar.setVisible(True)
         self.form.progressText.setVisible(True)
 
-        change_view = self.form.changesView
-        check_view = self.form.checksView
-
         # Aggregate all checks and changes from table cells
-        original_values = {}
-        changes_dict = {}
-        checks_list = []
-
-        for row_idx in range(change_view.rowCount()):
-            val_item = change_view.item(row_idx, 2)
-            objname = change_view.item(row_idx, 0).text()
-            objref = self._document.getObject(objname)
-            prop = change_view.item(row_idx, 1).text()
-
-            if objname not in changes_dict:
-                changes_dict[objname] = {}
-
-            changes_dict[objname][prop] = {
-                "val": val_item.text(),
-                "typ": val_item.toolTip()
-            }
-
-            # Store original value so we can restore it later
-            if objname not in original_values:
-                original_values[objname] = {}
-            original_values[objname][prop] = getattr(objref, prop)
-
-        for row_idx in range(check_view.count()):
-            expr = check_view.item(row_idx)
-            checks_list.append(expr.text())
+        changes_dict = self._read_changes_from_table()
+        checks_list = self._read_checks_from_table()
 
         # Loop until we hit max iterations or a check passes
         condition_fail = False
@@ -267,20 +309,10 @@ class MainWindow():
         while not condition_fail and iteration < max_iterations:
             self.form.progressBar.setValue(float(iteration+1) / float(max_iterations) * 100)
             self.form.progressText.setText(f"Running iteration {iteration+1}/{max_iterations}")
-
             self.form.logBox.append(f"<b>Running iteration {iteration+1}</b>")
 
             self.form.logBox.append("Applying changes...")
-            for (objname, changes) in changes_dict.items():
-                obj = self._document.getObject(objname)
-                for (prop, change) in changes.items():
-                    prev = getattr(obj, prop)
-
-                    if change['typ'] == USERTYPE_UNIT:
-                        new_val = prev + Units.Quantity(change['val'])
-                        setattr(obj, prop, new_val)
-                    else:
-                        self.form.logBox.append(f"No support for user type {change['typ']} yet...")
+            self._apply_delta_changes(changes_dict)
 
             self.form.logBox.append("Meshing...")
             self._document.recompute()
@@ -302,30 +334,9 @@ class MainWindow():
                 break
 
             self.form.logBox.append("Checking...")
+            current_result = self._find_rename_latest_result(iteration)
 
-            current_result = None
-            # TODO HACK: we assume that the latest FEM result obj is our result, there probably
-            # is a better way. This could cause some bugs later on.
-            for femobj in self._fem_analysis.Group:
-                if femobj.isDerivedFrom("Fem::FemResultObject") and not femobj.Label.startswith("Iteration"):
-                    femobj.Label = f"Iteration{iteration}"
-                    current_result = femobj
-                    break
-
-            print(f"Last FEM result: {current_result.Label}")
-
-            passed_checks = 0
-            for expr in checks_list:
-                # NOTE: not unused, these are for access from user expression
-                x = getattr(obj, prop)
-                i = iteration
-                r = current_result
-                ret = eval(expr)
-
-                if ret is True:
-                    passed_checks += 1
-
-            if passed_checks == len(checks_list):
+            if self._eval_checks(checks_list, current_result, iteration):
                 self.form.logBox.append("All checks passed!")
                 break
 
@@ -341,11 +352,7 @@ class MainWindow():
             self.form.logBox.append(f"<b>Had an error!</b>")
 
         self.form.logBox.append("Restoring original values...")
-
-        for (objname, changes) in original_values.items():
-            obj = self._document.getObject(objname)
-            for (prop, val) in changes.items():
-                setattr(obj, prop, val)
+        self._revert_delta_changes(changes_dict)
 
         self.form.logBox.append("Done!")
 
@@ -354,10 +361,6 @@ class MainWindow():
 
         self.form.progressText.setText(f"Finished in {elapsed_time} s, computed {iteration} iterations")
         self.form.progressBar.setVisible(False)
-
-
-    def _clear_object_table(self, table):
-        table.setRowCount(0)
 
     def _modify_checks(self, modify_row_idx=None):
         # Early out if the user clicked edit without selecting a row
