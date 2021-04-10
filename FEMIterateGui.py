@@ -1,4 +1,5 @@
 from FreeCAD import Units
+from PySide import QtGui
 from PySide.QtGui import QDialog, QMessageBox, QTableWidgetItem
 from femmesh.gmshtools import GmshTools
 from femtools import ccxtools
@@ -53,23 +54,47 @@ def _validate_python_expr(expr):
 
 
 class AddCheckWindow():
-    def __init__(self, edit_expr=None):
+    def __init__(self, settings, edit_expr=None):
         self.form = FreeCADGui.PySideUic.loadUi(UI_CHECK_FILE_PATH)
         self.expr = edit_expr
+        self.settings = settings
 
         f = self.form
 
         if edit_expr:
             f.exprEdit.setText(edit_expr)
 
+        f.addQuickExpr.clicked.connect(lambda: self._cb_mod_quickexpr(True))
+        f.delQuickExpr.clicked.connect(lambda: self._cb_mod_quickexpr(False))
+
         f.buttonBox.accepted.connect(self._cb_accept)
         f.buttonBox.rejected.connect(self._cb_cancel)
 
-        for e in BUILTIN_QUICK_EXPRESSIONS:
-            f.quickExprList.addItem(e)
+        self._generate_quickexpr_table(settings.quick_expressions)
 
         set_quick_expr = lambda s: f.exprEdit.setText(f.quickExprList.item(s.row()).text())
         f.quickExprList.doubleClicked.connect(set_quick_expr)
+
+    def _cb_mod_quickexpr(self, add=False):
+        f = self.form
+        qe = self.settings.quick_expressions
+        if add:
+            text = f.exprEdit.text()
+            if len(text) > 0:
+                qe.append(text)
+            else:
+                return
+        else:
+            row = f.quickExprList.currentRow()
+            it = f.quickExprList.item(row)
+            if it:
+                qe.remove(it.text())
+        self._generate_quickexpr_table(qe)
+
+    def _generate_quickexpr_table(self, values):
+        self.form.quickExprList.clear()
+        for e in values:
+            self.form.quickExprList.addItem(e)
 
     def _cb_accept(self):
         self.expr = self.form.exprEdit.text()
@@ -258,6 +283,10 @@ class MainWindow():
 
         f.calculateButton.clicked.connect(self._calculate)
 
+        # Options
+        f.iterationLimitEdit.valueChanged.connect(lambda v:
+                self._cb_iteration_limit_changed(v))
+
         # Changes table buttons
         f.changesAdd.clicked.connect(lambda: self._modify_changes())
 
@@ -279,6 +308,13 @@ class MainWindow():
 
         if not self._find_mesh_and_analysis_objects(False):
             f.tabWidget.setCurrentIndex(0)
+
+    def clicked(self, button):
+        if button == QtGui.QDialogButtonBox.Ok:
+            self._settings.save()
+
+    def _cb_iteration_limit_changed(self, val):
+        self._settings.iteration_limit = val
 
     def _apply_settings(self):
         f = self.form
@@ -502,7 +538,7 @@ class MainWindow():
             expr = widget.item(modify_row_idx).text()
             edit_mode = True
 
-        f = AddCheckWindow(expr)
+        f = AddCheckWindow(self._settings, expr)
 
         if f.form.exec_():
             if edit_mode:
