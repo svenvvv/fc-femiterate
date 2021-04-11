@@ -236,7 +236,7 @@ class Settings():
         self.csv_suffix = self._obj.CsvSuffix
 
         # No need to load FEMIterateVersion
-        self.changes = self._obj.QuickExpressions
+        self.quick_expressions = self._obj.QuickExpressions
 
         self.changes = self._obj.Changes
         self.checks = self._obj.Checks
