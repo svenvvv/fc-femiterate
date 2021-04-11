@@ -99,11 +99,16 @@ class AddCheckWindow():
     def _cb_accept(self):
         self.expr = self.form.exprEdit.text()
 
+        if len(self.expr) == 0:
+            QMessageBox.information(None, MSGBOX_TITLE, "Empty expression")
+            return
+
         if _validate_python_expr(self.expr):
             self.form.accept()
         else:
             QMessageBox.information(None, MSGBOX_TITLE,
                     "Provided expression did not evaluate!\nCheck the report view for error log.")
+            return
 
     def _cb_cancel(self):
         self.form.close()
@@ -287,11 +292,13 @@ class MainWindow():
         f.iterationLimitEdit.valueChanged.connect(lambda v:
                 self._cb_iteration_limit_changed(v))
 
+        # NOTE: tables modify_X are called from a lambda because we don't
+        # want Qt to mangle the first argument (which is None to indicate
+        # adding of new object to table).
+
         # Changes table buttons
         f.changesAdd.clicked.connect(lambda: self._modify_changes())
-
-        f.changesRemove.clicked.connect(lambda:
-                f.changesView.removeRow(f.changesView.currentRow()))
+        f.changesRemove.clicked.connect(self._cb_remove_change)
 
         changes_edit_fn = lambda: self._modify_changes(f.changesView.currentRow())
         f.changesEdit.clicked.connect(changes_edit_fn)
@@ -299,8 +306,7 @@ class MainWindow():
 
         # Checks table buttons
         f.checksAdd.clicked.connect(lambda: self._modify_checks())
-        f.checksRemove.clicked.connect(lambda:
-                f.checksView.takeItem(f.checksView.selectedIndexes()[0].row()))
+        f.checksRemove.clicked.connect(self._cb_remove_check)
 
         checks_edit_fn = lambda: self._modify_checks(f.checksView.currentRow())
         f.checksEdit.clicked.connect(checks_edit_fn)
@@ -308,6 +314,16 @@ class MainWindow():
 
         if not self._find_mesh_and_analysis_objects(False):
             f.tabWidget.setCurrentIndex(0)
+
+    def _cb_remove_change(self):
+        self.form.changesView.removeRow(self.form.changesView.currentRow())
+        # TODO: we don't have to re-read the whole table every time
+        self._settings.changes = self._read_changes_from_table()
+
+    def _cb_remove_check(self):
+        self.form.checksView.takeItem(self.form.checksView.selectedIndexes()[0].row())
+        # TODO: we don't have to re-read the whole table every time
+        self._settings.checks = self._read_checks_from_table()
 
     def _cb_iteration_limit_changed(self, val):
         self._settings.iteration_limit = val
