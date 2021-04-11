@@ -309,10 +309,6 @@ class MainWindow():
         if not self._find_mesh_and_analysis_objects(False):
             f.tabWidget.setCurrentIndex(0)
 
-    def clicked(self, button):
-        if button == QtGui.QDialogButtonBox.Ok:
-            self._settings.save()
-
     def _cb_iteration_limit_changed(self, val):
         self._settings.iteration_limit = val
 
@@ -646,6 +642,7 @@ class MainWindow():
         self.form.exec_()
 
     def accept(self):
+        self._settings.save()
         if GUI_IN_SIDEBAR:
             FreeCADGui.Control.closeDialog()
 
