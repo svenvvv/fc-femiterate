@@ -593,24 +593,28 @@ class MainWindow():
             return
 
         table = self.form.changesView
-        obj = self._select_object()
-        if obj:
-            sel_prop = None
-            sel_val = None
+        obj = None
+        sel_prop = None
+        sel_val = None
 
-            if modify_row_idx is not None and modify_row_idx >= 0:
-                # sel_obj = table.item(modify_row_idx, 0).text()
-                sel_prop = table.item(modify_row_idx, 1).text()
-                sel_val = table.item(modify_row_idx, 2).text()
-            else:
-                modify_row_idx = None
+        if modify_row_idx is not None and modify_row_idx >= 0:
+            sel_obj = table.item(modify_row_idx, 0).text()
+            sel_prop = table.item(modify_row_idx, 1).text()
+            sel_val = table.item(modify_row_idx, 2).text()
+            obj = FreeCAD.ActiveDocument.getObject(sel_obj)
+        else:
+            modify_row_idx = None
+            obj = self._select_object()
 
-            f = AddChangeWindow(obj, sel_prop, sel_val)
+        if not obj:
+            QMessageBox.information(None, MSGBOX_TITLE, "No object found")
+            return
 
-            if f.form.exec_():
-                self._add_or_modify_change(obj.Label, f.prop, f.value, f.type, modify_row_idx)
-                # TODO: we don't have to re-read the whole table every time
-                self._settings.changes = self._read_changes_from_table()
+        f = AddChangeWindow(obj, sel_prop, sel_val)
+        if f.form.exec_():
+            self._add_or_modify_change(obj.Label, f.prop, f.value, f.type, modify_row_idx)
+            # TODO: we don't have to re-read the whole table every time
+            self._settings.changes = self._read_changes_from_table()
 
     def _select_object(self):
         selection = FreeCADGui.Selection.getSelection()
