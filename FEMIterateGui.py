@@ -321,9 +321,11 @@ class MainWindow():
         self._settings.changes = self._read_changes_from_table()
 
     def _cb_remove_check(self):
-        self.form.checksView.takeItem(self.form.checksView.selectedIndexes()[0].row())
-        # TODO: we don't have to re-read the whole table every time
-        self._settings.checks = self._read_checks_from_table()
+        sel = self.form.checksView.selectedIndexes()
+        if len(sel) > 0:
+            self.form.checksView.takeItem(sel[0].row())
+            # TODO: we don't have to re-read the whole table every time
+            self._settings.checks = self._read_checks_from_table()
 
     def _cb_iteration_limit_changed(self, val):
         self._settings.iteration_limit = val
