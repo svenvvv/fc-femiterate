@@ -540,7 +540,7 @@ class MainWindow():
         elapsed_time = round(time.time() - start_time, 1)
         print(f"Solving finished in {elapsed_time} s")
 
-        self.form.progressText.setText(f"Finished in {elapsed_time} s, computed {iteration} iterations")
+        self.form.progressText.setText(f"Finished in {elapsed_time} s, computed {iteration+1} iterations")
         self.form.progressBar.setVisible(False)
         self._calculation_running = False
 
