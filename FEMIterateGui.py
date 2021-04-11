@@ -568,9 +568,9 @@ class MainWindow():
         # TODO: we don't have to re-read the whole table every time
         self._settings.checks = self._read_checks_from_table()
 
-    def _add_or_modify_change(self, objname, prop, value, type, row_number=None):
+    def _add_or_modify_change(self, objname, prop, value, type, row_number=-1):
         table = self.form.changesView
-        if not row_number:
+        if row_number < 0:
             row_count = table.rowCount()
             row_number = row_count
 
@@ -603,7 +603,7 @@ class MainWindow():
             sel_val = table.item(modify_row_idx, 2).text()
             obj = FreeCAD.ActiveDocument.getObject(sel_obj)
         else:
-            modify_row_idx = None
+            modify_row_idx = -1
             obj = self._select_object()
 
         if not obj:
