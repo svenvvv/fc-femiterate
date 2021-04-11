@@ -377,7 +377,7 @@ class MainWindow():
                     new_val = prev + Units.Quantity(change["val"])
                     setattr(obj, prop, new_val)
                 else:
-                    print(f"No support for user type {change['typ']} yet...")
+                    print(f"No support for user type {change['type']} yet...")
 
     @staticmethod
     def _revert_delta_changes(changes_dict):
@@ -476,6 +476,8 @@ class MainWindow():
         checks = self._settings.checks
 
         try:
+            # NOTE: we pick out the analysis and solver ourselves because for
+            # some reason ccxtools did not find it at times. No idea why.
             fea = ccxtools.FemToolsCcx(analysis=self._fem_analysis, solver=self._fem_solver)
             fea.purge_results()
         # ccxtools throws raw Exceptions, not a lazy catch-all here
