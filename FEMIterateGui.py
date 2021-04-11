@@ -5,6 +5,7 @@ from femmesh.gmshtools import GmshTools
 from femtools import ccxtools
 import FreeCAD,FreeCADGui,Part
 import PySide
+import json
 import time
 
 MSGBOX_TITLE = "Iterative CCX Solver"
@@ -227,10 +228,10 @@ class Settings():
         # TODO: probably should check if we're missing some settings on load if we're a newer ver
         obj.addProperty("App::PropertyString", "FEMIterateVersion", "Configuration", "")
         # Quick expressions
-        obj.addProperty("App::PropertyPythonObject", "QuickExpressions", "Configuration", "")
+        obj.addProperty("App::PropertyString", "QuickExpressions", "Configuration", "")
         # Parameters
-        obj.addProperty("App::PropertyPythonObject", "Changes", "Parameters", "")
-        obj.addProperty("App::PropertyPythonObject", "Checks", "Parameters", "")
+        obj.addProperty("App::PropertyString", "Changes", "Parameters", "")
+        obj.addProperty("App::PropertyString", "Checks", "Parameters", "")
 
         self._obj = obj
         self.save()
@@ -241,20 +242,22 @@ class Settings():
         self.csv_suffix = self._obj.CsvSuffix
 
         # No need to load FEMIterateVersion
-        self.quick_expressions = self._obj.QuickExpressions
+        self.quick_expressions = json.loads(self._obj.QuickExpressions)
 
-        self.changes = self._obj.Changes
-        self.checks = self._obj.Checks
+        # TODO: check if we still actually have these objects and
+        # fill the "orig" field with latest data.
+        self.changes = json.loads(self._obj.Changes)
+        self.checks = json.loads(self._obj.Checks)
 
     def save(self):
         self._obj.IterationLimit = self.iteration_limit
         self._obj.CsvSuffix = self.csv_suffix
 
         self._obj.FEMIterateVersion = FEMITERATE_VERSION
-        self._obj.QuickExpressions = self.quick_expressions
+        self._obj.QuickExpressions = json.dumps(self.quick_expressions)
 
-        self._obj.Changes = self.changes
-        self._obj.Checks = self.checks
+        self._obj.Changes = json.dumps(self.changes)
+        self._obj.Checks = json.dumps(self.checks)
 
 
 class MainWindow():
@@ -366,7 +369,7 @@ class MainWindow():
             ret[objname][prop] = {
                 "val": val_item.text(),
                 "type": val_item.toolTip(),
-                "orig": getattr(objref, prop)
+                "orig": str(getattr(objref, prop))
             }
         return ret
 
